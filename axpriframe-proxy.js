@@ -12,8 +12,7 @@ app.use(express.json({ limit: '4mb' }));
 function authHeaders() {
   return {
     'Content-Type': 'application/json',
-    'Authorization': 'Bearer ' + APIFRAME_KEY,
-  };
+'Authorization': APIFRAME_KEY,  };
 }
 
 async function relay(path, body) {
