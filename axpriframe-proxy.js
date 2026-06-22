@@ -2,74 +2,110 @@ const express = require('express');
 const cors = require('cors');
 const archiver = require('archiver');
 
-const APIFRAME_BASE = 'https://api.apiframe.ai/v2';
-const APIFRAME_KEY = process.env.APIFRAME_KEY || '';
+// APIFRAME V2 API
+const BASE = 'https://api.apiframe.ai/v2';
+const KEY = process.env.APIFRAME_KEY || '';
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '4mb' }));
 
-function authHeaders() {
+function headers() {
   return {
     'Content-Type': 'application/json',
-'Authorization': APIFRAME_KEY,  };
+    'X-API-Key': KEY,
+  };
 }
 
-async function relay(path, body) {
-  console.log('[proxy] ->', path, JSON.stringify(body).slice(0, 200));
+// Health check
+app.get('/', (_req, res) => {
+  res.json({ ok: true, service: 'apiframe-proxy-v2', hasKey: !!KEY, keyPrefix: KEY.slice(0, 4) });
+});
+
+// Submit a Midjourney imagine job (v2 endpoint)
+app.post('/mj/imagine', async (req, res) => {
+  const { prompt, aspect_ratio } = req.body;
+  const body = {
+    model: 'midjourney',
+    prompt: prompt,
+    midjourneyParams: {}
+  };
+  if (aspect_ratio) body.midjourneyParams.aspect_ratio = aspect_ratio;
+
+  console.log('[proxy] POST /images/generate', JSON.stringify(body).slice(0, 200));
   try {
-    const r = await fetch(APIFRAME_BASE + path, {
+    const r = await fetch(BASE + '/images/generate', {
       method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify(body || {}),
+      headers: headers(),
+      body: JSON.stringify(body),
     });
     const text = await r.text();
     console.log('[proxy] <-', r.status, text.slice(0, 300));
     let data;
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    return { status: r.status, data };
+    res.status(r.status).json(data);
   } catch (err) {
-    console.error('[proxy] fetch error:', err.message);
-    return { status: 502, data: { error: err.message } };
+    console.error('[proxy] error:', err.message);
+    res.status(502).json({ error: err.message });
   }
-}
-
-app.get('/', (_req, res) => {
-  res.json({ ok: true, service: 'apiframe-proxy', hasKey: !!APIFRAME_KEY });
 });
 
-app.post('/mj/imagine', async (req, res) => {
-  const { status, data } = await relay('/imagine', req.body);
-  res.status(status).json(data);
+// Poll a single job by ID (v2 uses GET /jobs/:id)
+app.get('/mj/job/:id', async (req, res) => {
+  try {
+    const r = await fetch(BASE + '/jobs/' + req.params.id, {
+      method: 'GET',
+      headers: headers(),
+    });
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    res.status(r.status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
 });
 
-app.post('/mj/fetch-many', async (req, res) => {
-  const { status, data } = await relay('/fetch-many', req.body);
-  res.status(status).json(data);
+// Poll many jobs at once (proxy batches individual v2 calls)
+app.post('/mj/poll', async (req, res) => {
+  const ids = req.body.ids || [];
+  console.log('[proxy] polling', ids.length, 'jobs');
+  const results = [];
+  for (const id of ids) {
+    try {
+      const r = await fetch(BASE + '/jobs/' + id, {
+        method: 'GET',
+        headers: headers(),
+      });
+      const text = await r.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      data._jobId = id;
+      results.push(data);
+    } catch (err) {
+      results.push({ _jobId: id, error: err.message });
+    }
+  }
+  res.json(results);
 });
 
-app.post('/mj/upscale-highres', async (req, res) => {
-  const { status, data } = await relay('/upscale-highres', req.body);
-  res.status(status).json(data);
-});
-
+// ZIP download
 app.post('/mj/zip', async (req, res) => {
   const items = Array.isArray(req.body?.items)
     ? req.body.items
     : (req.body?.urls || []).map((u, i) => ({ url: u, name: `frame-${i + 1}.png` }));
-  if (!items.length) return res.status(400).json({ error: 'No images provided' });
+  if (!items.length) return res.status(400).json({ error: 'No images' });
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="midjourney-batch.zip"');
   const archive = archiver('zip', { zlib: { level: 6 } });
-  archive.on('error', () => { try { res.status(500); } catch {} res.end(); });
+  archive.on('error', () => res.end());
   archive.pipe(res);
   for (let i = 0; i < items.length; i++) {
-    const { url, name } = items[i];
     try {
-      const r = await fetch(url);
+      const r = await fetch(items[i].url);
       if (!r.ok) continue;
       const buf = Buffer.from(await r.arrayBuffer());
-      archive.append(buf, { name: name || `frame-${i + 1}.png` });
+      archive.append(buf, { name: items[i].name || `frame-${i + 1}.png` });
     } catch { /* skip */ }
   }
   archive.finalize();
@@ -77,6 +113,6 @@ app.post('/mj/zip', async (req, res) => {
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log('apiframe-proxy listening on ' + PORT);
-  console.log('APIFRAME_KEY set:', !!APIFRAME_KEY, '(length:', APIFRAME_KEY.length + ')');
+  console.log('apiframe-proxy-v2 on port', PORT);
+  console.log('Key loaded:', !!KEY, 'prefix:', KEY.slice(0, 4));
 });
