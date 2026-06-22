@@ -1,0 +1,11 @@
+{
+  "name": "apiframe-proxy",
+  "version": "1.0.0",
+  "main": "apiframe-proxy.js",
+  "scripts": { "start": "node apiframe-proxy.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "archiver": "^7.0.1"
+  }
+}
