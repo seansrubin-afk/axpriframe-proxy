@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const archiver = require('archiver');
 
-const APIFRAME_BASE = 'https://api.apiframe.pro';
+const APIFRAME_BASE = 'https://api.apiframe.ai/v2';
 const APIFRAME_KEY = process.env.APIFRAME_KEY || '';
 
 const app = express();
